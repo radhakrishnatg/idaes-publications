@@ -11,6 +11,15 @@
 # for full copyright and license information.
 #################################################################################
 
+"""
+This module contains functions for building a flowsheet with a direct-fired cycle,
+air separation unit, liquefaction unit, and a liquid oxygen storage tank. It
+also contains functions for computing fuel requirement for startup/shutdown of
+the direct-fired cycle, and for computing power requirement for startup/shutdown
+of the air separation unit.
+"""
+
+from idaes.apps.grid_integration import OperationModel, StorageModel, PriceTakerModel
 from pyomo.environ import (
     Var,
     NonNegativeReals,
@@ -19,13 +28,7 @@ from pyomo.environ import (
     Expression,
 )
 
-from idaes.apps.grid_integration import (
-    DesignModel,
-    OperationModel,
-    StorageModel,
-    PriceTakerModel,
-)
-
+# pylint: disable = import-error
 from default_parameters import (
     DFCParams,
     ASUParams,
@@ -51,8 +54,8 @@ def _add_dfc_operation_model(m, ptm):
                 params.perf_curve_coeff[1] * params.ng_flow_power_ratio,
             ),
             "vom": (
-                params.const_vom_coeff[0] * ptm.dfc_design.max_power
-                + params.const_vom_coeff[1],
+                params.const_vom_coeff[0]
+                + params.const_vom_coeff[1] * ptm.dfc_design.max_power,
                 params.var_vom_coeff,
             ),
         }
@@ -71,6 +74,7 @@ def _add_dfc_operation_model(m, ptm):
                 * HR_TO_SEC  # 3600 s
                 * (1 - params.co2_captured)  # Fraction not captured
                 * params.carbon_price  # $/kg of CO2
+                / 1000  # Converting the cost to $1000
             ),
             "fuel_cost": (
                 # $/MMBtu * kg/s * s * MMBtu/kg
@@ -78,6 +82,7 @@ def _add_dfc_operation_model(m, ptm):
                 * HR_TO_SEC  # 3600 s
                 * params.ng_hhv  # MMBtu / kg NG
                 * params.ng_cost  # $/MMBtu
+                / 1000  # Converting the cost to $1000
             ),
         },
         declare_variables=True,
@@ -94,12 +99,12 @@ def _add_asu_operation_model(m, ptm):
             "power": (
                 params.perf_curve_coeff[0]
                 * params.power_o2_flow_ratio
-                * ptm.asu_params.ptm.asu_design.max_o2_flow,
+                * ptm.asu_design.max_o2_flow,
                 params.perf_curve_coeff[1] * params.power_o2_flow_ratio,
             ),
             "vom": (
-                params.const_vom_coeff[0] * ptm.asu_design.max_o2_flow
-                + params.const_vom_coeff[1],
+                params.const_vom_coeff[0]
+                + params.const_vom_coeff[1] * ptm.asu_design.max_o2_flow,
                 params.var_vom_coeff,
             ),
         }
@@ -112,10 +117,18 @@ def _add_asu_operation_model(m, ptm):
         expressions={
             "total_power": m.asu.power + m.asu.su_sd_power,
             "argon_revenue": (
-                params.ar_o2_ratio * m.asu.o2_flow * HR_TO_SEC * params.argon_price
+                params.ar_o2_ratio  # kg Ar / kg GOx
+                * m.asu.o2_flow  # kg/s of GOx
+                * HR_TO_SEC  # 3600 s
+                * params.argon_price  # $/kg Ar
+                / 1000  # Converting the revenue to $1000
             ),
             "nitrogen_revenue": (
-                params.n2_o2_ratio * m.asu.o2_flow * HR_TO_SEC * params.nitrogen_price
+                params.n2_o2_ratio  # kg GAN / kg GOx
+                * m.asu.o2_flow  # kg/s of GOx
+                * HR_TO_SEC  # 3600 s
+                * params.nitrogen_price  # $/kg GAN
+                / 1000  # Converting the revenue to $1000
             ),
         },
         declare_variables=True,
@@ -139,7 +152,6 @@ def _add_power_vars_and_constraints(m):
     m.power_grid_to_asu = Var(within=NonNegativeReals, doc="Grid power to ASU")
     m.power_grid_to_nlu = Var(within=NonNegativeReals, doc="Grid power to NLU")
     m.power_grid_to_tank = Var(within=NonNegativeReals, doc="Grid power to tank")
-    m.o2
 
     m.dfc_power_balance = Constraint(
         expr=(
@@ -152,7 +164,7 @@ def _add_power_vars_and_constraints(m):
         doc="Power balance around the direct-fired cycle",
     )
     m.asu_power_balance = Constraint(
-        expr=m.asu.power == m.power_dfc_to_asu + m.power_grid_to_asu,
+        expr=m.asu.total_power == m.power_dfc_to_asu + m.power_grid_to_asu,
         doc="Power balance around the air separation unit",
     )
     m.nlu_power_balance = Constraint(
@@ -211,147 +223,89 @@ def flowsheet_model(m, ptm):
             "operation_var": "o2_flow",
             "power": nlu_params.power_o2_flow_ratio,
             "vom": (
-                nlu_params.const_vom_coeff[0] * ptm.nlu_design.max_o2_flow
-                + nlu_params.const_vom_coeff[1],
+                nlu_params.const_vom_coeff[0]
+                + nlu_params.const_vom_coeff[1] * ptm.nlu_design.max_o2_flow,
                 nlu_params.var_vom_coeff,
             ),
         }
     )
+    m.minimum_tank_holdup = Expression(
+        expr=tank_params.min_holdup * ptm.tank_design.tank_capacity,
+    )
     m.tank = StorageModel(
-        min_holdup=tank_params.min_holdup * ptm.tank_design.tank_capacity,
+        time_interval=(3600 / 1000),
+        min_holdup=m.minimum_tank_holdup,
         max_holdup=ptm.tank_design.tank_capacity,
+    )
+    m.tank.power = Expression(
+        expr=tank_params.power_o2_flow_ratio * m.tank.discharge_rate,
+        doc="Power required to pressurize liquid oxygen [in MW]",
     )
 
     # Declare auxiliary variables needed to complete the flowsheet
     _add_power_vars_and_constraints(m)
     _add_o2_flow_vars_and_constraints(m)
 
-
-def build_pricetaker(
-    dfc_params: DFCParams,
-    asu_params: ASUParams,
-    nlu_params: NLUParams,
-    tank_params: LOxTankParams,
-):
-    """Returns an instance of the PriceTakerModel"""
-    m = PriceTakerModel()
-
-    # Save a pointer to the parameters for convenience
-    m.dfc_params = dfc_params
-    m.asu_params = asu_params
-    m.nlu_params = nlu_params
-    m.tank_params = tank_params
-
-    # Append LMP data to the model
-    m.append_lmp_data(lmp_data=[2, 4, 6, 8])
-
-    # Build design surrogate models for all units
-    m.dfc_design = DesignModel(
-        variable_design_data={
-            "design_var": "max_power",
-            "design_var_bounds": dfc_params.des_capacity_range,
-            "capex": dfc_params.capex,
-            "fom": dfc_params.fom,
-        }
-    )
-    m.asu_design = DesignModel(
-        variable_design_data={
-            "design_var": "max_o2_flow",
-            "design_var_bounds": asu_params.des_capacity_range,
-            "capex": asu_params.capex,
-            "fom": asu_params.fom,
-        }
-    )
-    m.nlu_design = DesignModel(
-        variable_design_data={
-            "design_var": "max_o2_flow",
-            "design_var_bounds": nlu_params.des_capacity_range,
-            "capex": nlu_params.capex,
-            "fom": nlu_params.fom,
-        }
-    )
-    m.tank_design = DesignModel(
-        variable_design_data={
-            "design_var": "tank_capacity",
-            "design_var_bounds": tank_params.des_capacity_range,
-            "capex": tank_params.capex,
-            "fom": tank_params.fom,
-        }
+    # Add electricity revenue and cost expressions
+    m.electricity_revenue = Expression(expr=m.LMP * m.power_to_grid)
+    m.power_cost = Expression(
+        expr=(m.LMP + ptm.cashflow_params.electricity_cost) * m.power_from_grid
     )
 
-    # # Build multiperiod flowsheet model
-    # m.build_multiperiod_model(
-    #     flowsheet_func=flowsheet_model, flowsheet_options={"ptm": m}
-    # )
 
-    # # Add capacity limit constraints on all units
-    # m.add_capacity_limits(
-    #     op_block_name="dfc",
-    #     commodity="power",
-    #     capacity=m.dfc_design.max_power,
-    #     op_range_lb=dfc_params.op_capacity_range[0],
-    # )
-    # m.add_capacity_limits(
-    #     op_block_name="asu",
-    #     commodity="o2_flow",
-    #     capacity=m.asu_design.max_o2_flow,
-    #     op_range_lb=asu_params.op_capacity_range[0],
-    # )
-    # m.add_capacity_limits(
-    #     op_block_name="nlu",
-    #     commodity="o2_flow",
-    #     capacity=m.nlu_design.max_o2_flow,
-    #     op_range_lb=nlu_params.op_capacity_range[0],
-    # )
+def add_dfc_startup_fuel(m: PriceTakerModel):
+    """Computes the fuel requirement for DFC startup and shutdown"""
 
-    # # Add minimum uptime-downtime constraints
-    # m.add_startup_shutdown(
-    #     op_block_name="dfc",
-    #     des_block_name="dfc_design",
-    #     up_time=dfc_params.min_up_time,
-    #     down_time=dfc_params.min_down_time,
-    # )
-    # m.add_startup_shutdown(
-    #     op_block_name="asu",
-    #     des_block_name="asu_design",
-    #     up_time=asu_params.min_up_time,
-    #     down_time=asu_params.min_down_time,
-    # )
+    params: DFCParams = m.dfc_params
+    min_fuel = (
+        (
+            params.perf_curve_coeff[0]
+            + params.perf_curve_coeff[1] * params.op_capacity_range[0]
+        )
+        * params.ng_flow_power_ratio
+        * m.dfc_design.max_power
+    )
+    num_time_steps = len(m.period)
 
-    # # Add ramping constraints
-    # m.add_ramping_limits(
-    #     op_block_name="dfc",
-    #     commodity="power",
-    #     capacity=m.dfc_design.max_power,
-    #     startup_rate=dfc_params.startup_rate,
-    #     shutdown_rate=dfc_params.shutdown_rate,
-    #     rampup_rate=dfc_params.rampup_rate,
-    #     rampdown_rate=dfc_params.rampdown_rate,
-    # )
-    # m.add_ramping_limits(
-    #     op_block_name="asu",
-    #     commodity="o2_flow",
-    #     capacity=m.asu_design.max_o2_flow,
-    #     startup_rate=asu_params.startup_rate,
-    #     shutdown_rate=asu_params.shutdown_rate,
-    #     rampup_rate=asu_params.rampup_rate,
-    #     rampdown_rate=asu_params.rampdown_rate,
-    # )
-
-    # # Add hourly cashflow expressions
-    # m.add_hourly_cashflows(
-    #     revenue_streams=["electricity_revenue", "argon_revenue", "nitrogen_revenue"],
-    #     operational_costs=["vom", "fuel_cost", "power_cost"],
-    # )
-
-    # # Add overall cashflows
-    # m.add_overall_cashflows()
-
-    # # Add the objective function
-    # m.add_objective_function()
-
-    return m
+    @m.Constraint(m.period.index_set())
+    def dfc_su_sd_fuel_requirement(blk, d, t):
+        k1 = (
+            0.25 * min_fuel * blk.period[d, t + 2].dfc.startup
+            if t + 2 <= num_time_steps
+            else 0
+        )
+        k2 = (
+            0.75 * min_fuel * blk.period[d, t + 1].dfc.startup
+            if t + 1 <= num_time_steps
+            else 0
+        )
+        k3 = 0.75 * min_fuel * blk.period[d, t].dfc.shutdown
+        k4 = 0.25 * min_fuel * blk.period[d, t - 1].dfc.shutdown if t - 1 > 0 else 0
+        return blk.period[d, t].dfc.su_sd_ng_flow == k1 + k2 + k3 + k4
 
 
-if __name__ == "__main__":
-    mdl = build_pricetaker(DFCParams(), ASUParams(), NLUParams(), LOxTankParams())
+def add_asu_startup_power(m: PriceTakerModel):
+    """Computes the power requirement for ASU startup and shutdown"""
+
+    params: ASUParams = m.asu_params
+
+    # Assuming that the power requirement during startup is 80% of full load power
+    # Assuming that the power requirement during shutdown is 50% of full load power
+    # Assuming that the time required for startup is 8 hours
+    # Assuming that the time required for shutdown is 1 hour
+    start_power = 0.8 * params.power_o2_flow_ratio * m.asu_design.max_o2_flow
+    shutdown_power = 0.5 * params.power_o2_flow_ratio * m.asu_design.max_o2_flow
+    su_time = 8
+    num_time_steps = len(m.period)
+
+    @m.Constraint(m.period.index_set())
+    def asu_su_sd_fuel_requirement(blk, d, t):
+        _startup_power = sum(
+            start_power * blk.period[d, t + i].asu.startup
+            for i in range(1, su_time + 1)
+            if t + i <= num_time_steps
+        )
+        return (
+            blk.period[d, t].asu.su_sd_power
+            == _startup_power + shutdown_power * blk.period[d, t].asu.shutdown
+        )
