@@ -76,6 +76,14 @@ def _add_dfc_operation_model(m, ptm):
                 * params.carbon_price  # $/kg of CO2
                 / 1000  # Converting the cost to $1000
             ),
+            "carbon_credit": (
+                params.co2_emission_rate  # kg CO2 / kg NG
+                * m.dfc.total_ng_flow  # kg/s of NG
+                * HR_TO_SEC  # 3600 s
+                * params.co2_captured  # Fraction not captured
+                * params.carbon_credit  # $/kg of CO2
+                / 1000  # Converting the revenue to $1000
+            ),
             "fuel_cost": (
                 # $/MMBtu * kg/s * s * MMBtu/kg
                 m.dfc.total_ng_flow  # kg/s of NG
@@ -249,7 +257,9 @@ def flowsheet_model(m, ptm):
     # Add electricity revenue and cost expressions
     m.electricity_revenue = Expression(expr=m.LMP * m.power_to_grid)
     m.power_cost = Expression(
-        expr=(m.LMP + ptm.cashflow_params.electricity_cost) * m.power_from_grid
+        # Dividing the electricity_cost by 1000 for scaling
+        expr=(m.LMP + ptm.cashflow_params.electricity_cost / 1000)
+        * m.power_from_grid
     )
 
 

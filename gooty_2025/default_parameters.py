@@ -130,6 +130,7 @@ class DFCParams:
     ng_cost: float             = 3                           # [$/MMBtu] Cost of natural gas
     ng_hhv: float              = NG_HHV                      # [MMBtu/kg] HHV of natural gas
     carbon_price: float        = 0.1                         # [$/kg] Carbon price
+    carbon_credit: float       = 0                           # [$/kg] Credits for captured CO2
 
     startup_rate: float        = 0.3                         # As a fraction of the total capacity
     shutdown_rate: float       = 0.3                         # As a fraction of the total capacity
@@ -272,8 +273,4 @@ class CashflowParams:
     discount_rate: float    = 0.075  # [-] Discount rate
     tax_rate: float         = 0.2    # [-] Corporate tax rate
     electricity_cost: float = 5      # [$/MWh] Excess penalty for purchasing electricity
-
-    def __post_init__(self):
-        discount_rate = self.discount_rate
-        plant_life = self.plant_life
-        self.fcr = 1 / ((1 - (1 + discount_rate) ** (-plant_life)) / discount_rate)
+    fcr: float | None       = None   # [-] Custom annualization factor
