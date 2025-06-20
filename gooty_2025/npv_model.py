@@ -14,6 +14,7 @@
 """Contains function that returns an instance of the price-taker model"""
 
 from idaes.apps.grid_integration import DesignModel, PriceTakerModel
+from pyomo.environ import Expression
 
 # pylint: disable = import-error
 from default_parameters import (
@@ -169,15 +170,31 @@ def build_pricetaker(
     # Add the objective function
     m.add_objective_function(objective_type="npv")
 
+    # Useful expressions
+    m.total_vom = Expression(
+        expr=sum(m.period[:, :].dfc.vom)
+        + sum(m.period[:, :].asu.vom)
+        + sum(m.period[:, :].nlu.vom)
+    )
+    m.total_electricity_revenue = Expression(
+        expr=sum(m.period[:, :].electricity_revenue)
+    )
+    m.total_power_cost = Expression(expr=sum(m.period[:, :].power_cost))
+    m.total_fuel_cost = Expression(expr=sum(m.period[:, :].dfc.fuel_cost))
+    m.total_carbon_price = Expression(expr=sum(m.period[:, :].dfc.carbon_price))
+    m.total_carbon_credit = Expression(expr=sum(m.period[:, :].dfc.carbon_credit))
+    m.total_argon_revenue = Expression(expr=sum(m.period[:, :].asu.argon_revenue))
+    m.total_nitrogen_revenue = Expression(expr=sum(m.period[:, :].asu.nitrogen_revenue))
+
     return m
 
 
-if __name__ == "__main__":
-    mdl = build_pricetaker(
-        [2, 4, 6, 8],
-        DFCParams(),
-        ASUParams(),
-        NLUParams(),
-        LOxTankParams(),
-        CashflowParams(),
-    )
+# if __name__ == "__main__":
+#     mdl = build_pricetaker(
+#         [2, 4, 6, 8],
+#         DFCParams(),
+#         ASUParams(),
+#         NLUParams(),
+#         LOxTankParams(),
+#         CashflowParams(),
+#     )

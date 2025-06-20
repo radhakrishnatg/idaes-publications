@@ -29,6 +29,11 @@ from default_parameters import (
 from npv_model import build_pricetaker
 from price_data import CO2_PRICE_DATA, LMP_DATA, NG_PRICE_DATA, PRICE_SIGNALS
 
+# Create a folder called "results", if it does not exist, to store all results
+results_folder = Path(__file__).parent / "results"
+if not results_folder.exists():
+    results_folder.mkdir()
+
 
 def solve_and_save_results(m: PriceTakerModel, folder: Path, filename: str):
     """Solves the optimization model and writes the results to a file"""
@@ -37,24 +42,33 @@ def solve_and_save_results(m: PriceTakerModel, folder: Path, filename: str):
     solver = pyo.SolverFactory("gurobi_persistent")
     solver.set_instance(m)
     solver.options["MIPGap"] = 0.01
-    solver.options["TimeLimit"] = 7200
-    res = solver.solve()
+    solver.options["TimeLimit"] = 10000
+    solver.solve(tee=True)
 
     # Write results to files
-    m.get_operation_var_values().to_csv(folder / filename + ".csv")
+    m.get_operation_var_values().to_csv(folder / (filename + ".csv"))
     des_var_values = m.get_design_var_values()
-    des_var_values["comp_time"] = res
-    des_var_values["duality_gap"] = res
+    des_var_values["comp_time"] = solver._solver_model.Runtime
+    des_var_values["duality_gap"] = solver._solver_model.MIPGap * 100
+    _net_power = pyo.value(
+        m.dfc_design.max_power
+        - m.asu_params.power_o2_flow_ratio * m.asu_design.max_o2_flow
+    )
+    # If the DFC is not built, then the net power would be zero.
+    # So, we include an epsilon to avoid division with zero
+    des_var_values["capacity_factor"] = pyo.value(
+        sum(m.period[:, :].power_to_grid) / (8760 * max(0.001, _net_power))
+    )
 
     # pylint: disable = unspecified-encoding
-    with open(folder / filename + ".json", "w") as fp:
-        json.dump(des_var_values, fp)
+    with open(folder / (filename + ".json"), "w") as fp:
+        json.dump(des_var_values, fp, indent=4)
 
 
 def model_validation():
     """Solves for standalone DFC and ASU for model validation"""
     # Create a sub-folder in results, if it does not exist
-    folder = Path(__file__).parent / "results" / "validation"
+    folder = results_folder / "validation"
     if not folder.exists():
         folder.mkdir()
 
@@ -79,7 +93,7 @@ def model_validation():
             dfc_params=DFCParams(ng_cost=4.42, carbon_price=0),
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
-            LOxTankParams=LOxTankParams(),
+            tank_params=LOxTankParams(),
             cashflow_params=cost_params,
         )
 
@@ -92,13 +106,14 @@ def model_validation():
         solve_and_save_results(m, folder, ps)
 
 
-def no_storage_no_ar_revenue():
+def no_storage_no_ar_no_co2():
     """
     Runs the price-taker model for the base case i.e., without
-    storage, and without revenue from Argon market.
+    storage, without revenue from Argon market, and without
+    CO2 credits.
     """
     # Create a sub-folder in results, if it does not exist
-    folder = Path(__file__).parent / "results" / "no_storage_no_ar_revenue"
+    folder = results_folder / "no_storage_no_ar_no_co2"
     if not folder.exists():
         folder.mkdir()
 
@@ -110,10 +125,16 @@ def no_storage_no_ar_revenue():
             ),
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
-            LOxTankParams=LOxTankParams(),
+            tank_params=LOxTankParams(),
             cashflow_params=CashflowParams(),
         )
 
         # Ensure that DFC is built
-        m.nlu_design.install_unit.fix(1)
+        m.dfc_design.install_unit.fix(1)
+        m.nlu_design.install_unit.fix(0)
         solve_and_save_results(m, folder, filename)
+
+
+if __name__ == "__main__":
+    # model_validation()
+    no_storage_no_ar_no_co2()
