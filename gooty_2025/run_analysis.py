@@ -28,6 +28,7 @@ from default_parameters import (
 )
 from npv_model import build_pricetaker
 from price_data import CO2_PRICE_DATA, LMP_DATA, NG_PRICE_DATA, PRICE_SIGNALS
+from util import partition_variables
 
 # Create a folder called "results", if it does not exist, to store all results
 results_folder = Path(__file__).parent / "results"
@@ -41,6 +42,7 @@ def solve_and_save_results(m: PriceTakerModel, folder: Path, filename: str):
     # Solve the model
     solver = pyo.SolverFactory("gurobi_persistent")
     solver.set_instance(m)
+    partition_variables(solver, partition_size=500)
     solver.options["MIPGap"] = 0.01
     solver.options["TimeLimit"] = 10000
     solver.solve(tee=True)
@@ -135,6 +137,176 @@ def no_storage_no_ar_no_co2():
         solve_and_save_results(m, folder, filename)
 
 
+def no_storage_with_ar_no_co2():
+    """
+    Runs the price-taker model for the base case i.e., without
+    storage, without revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "no_storage_with_ar_no_co2"
+    if not folder.exists():
+        folder.mkdir()
+
+    for signal, filename in PRICE_SIGNALS.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal], carbon_price=CO2_PRICE_DATA[signal]
+            ),
+            asu_params=ASUParams(argon_price=0.4),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=CashflowParams(),
+        )
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.nlu_design.install_unit.fix(0)
+        solve_and_save_results(m, folder, filename)
+
+
+def no_storage_no_ar_with_co2():
+    """
+    Runs the price-taker model for the base case i.e., without
+    storage, without revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "no_storage_no_ar_with_co2"
+    if not folder.exists():
+        folder.mkdir()
+
+    for signal, filename in PRICE_SIGNALS.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal],
+                carbon_price=CO2_PRICE_DATA[signal],
+                carbon_credit=0.06,
+            ),
+            asu_params=ASUParams(),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=CashflowParams(),
+        )
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.nlu_design.install_unit.fix(0)
+        solve_and_save_results(m, folder, filename)
+
+
+def no_storage_with_ar_with_co2():
+    """
+    Runs the price-taker model for the base case i.e., without
+    storage, without revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "no_storage_with_ar_with_co2"
+    if not folder.exists():
+        folder.mkdir()
+
+    for signal, filename in PRICE_SIGNALS.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal],
+                carbon_price=CO2_PRICE_DATA[signal],
+                carbon_credit=0.06,
+            ),
+            asu_params=ASUParams(argon_price=0.4),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=CashflowParams(),
+        )
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.nlu_design.install_unit.fix(0)
+        solve_and_save_results(m, folder, filename)
+
+
+def no_storage_full_flexibility():
+    """
+    Runs the price-taker model for the base case i.e., without
+    storage, without revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "no_storage_full_flexibility"
+    if not folder.exists():
+        folder.mkdir()
+
+    for signal, filename in PRICE_SIGNALS.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal], carbon_price=CO2_PRICE_DATA[signal]
+            ),
+            asu_params=ASUParams(),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=CashflowParams(),
+        )
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.nlu_design.install_unit.fix(0)
+
+        # Ensure that all units are fully flexible:
+        m.del_component(m.dfc_startup_shutdown)
+        m.del_component(m.asu_startup_shutdown)
+        m.del_component(m.dfc_power_ramping)
+        m.del_component(m.asu_o2_flow_ramping)
+        solve_and_save_results(m, folder, filename)
+
+
+def with_storage_full_flexibility():
+    """
+    Runs the price-taker model for the base case i.e., without
+    storage, without revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "with_storage_full_flexibility"
+    if not folder.exists():
+        folder.mkdir()
+
+    for signal, filename in PRICE_SIGNALS.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal], carbon_price=CO2_PRICE_DATA[signal]
+            ),
+            asu_params=ASUParams(),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=CashflowParams(),
+        )
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+
+        # Ensure that all units are fully flexible:
+        m.del_component(m.dfc_startup_shutdown)
+        m.del_component(m.asu_startup_shutdown)
+        m.del_component(m.dfc_power_ramping)
+        m.del_component(m.asu_o2_flow_ramping)
+        solve_and_save_results(m, folder, filename)
+
+
 if __name__ == "__main__":
     # model_validation()
-    no_storage_no_ar_no_co2()
+    # no_storage_no_ar_no_co2()
+    # no_storage_with_ar_no_co2()
+    # no_storage_no_ar_with_co2()
+    # no_storage_with_ar_with_co2()
+    # no_storage_full_flexibility()
+    with_storage_full_flexibility()

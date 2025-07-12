@@ -46,20 +46,48 @@ def _add_dfc_operation_model(m, ptm):
     m.dfc = OperationModel(
         polynomial_surrogate_data={
             "operation_var": "power",
-            # Surrogate model form: a0 + a1 * power + a2 * power**2 + ....
+            # # Surrogate model form: a0 + a1 * power + a2 * power**2 + ....
+            # "ng_flow": (
+            #     params.perf_curve_coeff[0]
+            #     * params.ng_flow_power_ratio
+            #     * ptm.dfc_design.max_power,
+            #     params.perf_curve_coeff[1] * params.ng_flow_power_ratio,
+            # ),
+            # "vom": (
+            #     params.const_vom_coeff[0]
+            #     + params.const_vom_coeff[1] * ptm.dfc_design.max_power,
+            #     params.var_vom_coeff,
+            # ),
+        }
+    )
+    m.dfc.power.domain = NonNegativeReals
+
+    m.dfc.define_linearization_vars(
+        capacity_var=ptm.dfc_design.max_power, aux_var_name="aux_max_power"
+    )
+    m.dfc.build_expressions(
+        expressions={
             "ng_flow": (
                 params.perf_curve_coeff[0]
                 * params.ng_flow_power_ratio
-                * ptm.dfc_design.max_power,
-                params.perf_curve_coeff[1] * params.ng_flow_power_ratio,
+                * m.dfc.aux_max_power["op_mode"]
+                + params.perf_curve_coeff[1] * params.ng_flow_power_ratio * m.dfc.power
             ),
             "vom": (
-                params.const_vom_coeff[0]
-                + params.const_vom_coeff[1] * ptm.dfc_design.max_power,
-                params.var_vom_coeff,
+                params.const_vom_coeff[0] * m.dfc.op_mode
+                + params.const_vom_coeff[1] * m.dfc.aux_max_power["op_mode"]
+                + params.var_vom_coeff * m.dfc.power
             ),
-        }
+        },
+        declare_variables=True,
     )
+    m.dfc.power_lb_con = Constraint(
+        expr=params.op_capacity_range[0] * m.dfc.aux_max_power["op_mode"] <= m.dfc.power
+    )
+    m.dfc.power_ub_con = Constraint(
+        expr=m.dfc.power <= params.op_capacity_range[1] * m.dfc.aux_max_power["op_mode"]
+    )
+
     m.dfc.su_sd_ng_flow = Var(
         within=NonNegativeReals,
         doc="Natural gas flowrate required during startup and shutdown [kg/s]",
@@ -104,19 +132,51 @@ def _add_asu_operation_model(m, ptm):
     m.asu = OperationModel(
         polynomial_surrogate_data={
             "operation_var": "o2_flow",
+            # "power": (
+            #     params.perf_curve_coeff[0]
+            #     * params.power_o2_flow_ratio
+            #     * ptm.asu_design.max_o2_flow,
+            #     params.perf_curve_coeff[1] * params.power_o2_flow_ratio,
+            # ),
+            # "vom": (
+            #     params.const_vom_coeff[0]
+            #     + params.const_vom_coeff[1] * ptm.asu_design.max_o2_flow,
+            #     params.var_vom_coeff,
+            # ),
+        }
+    )
+    m.asu.o2_flow.domain = NonNegativeReals
+
+    m.asu.define_linearization_vars(
+        capacity_var=ptm.asu_design.max_o2_flow, aux_var_name="aux_max_o2_flow"
+    )
+    m.asu.build_expressions(
+        expressions={
             "power": (
                 params.perf_curve_coeff[0]
                 * params.power_o2_flow_ratio
-                * ptm.asu_design.max_o2_flow,
-                params.perf_curve_coeff[1] * params.power_o2_flow_ratio,
+                * m.asu.aux_max_o2_flow["op_mode"]
+                + params.perf_curve_coeff[1]
+                * params.power_o2_flow_ratio
+                * m.asu.o2_flow
             ),
             "vom": (
-                params.const_vom_coeff[0]
-                + params.const_vom_coeff[1] * ptm.asu_design.max_o2_flow,
-                params.var_vom_coeff,
+                params.const_vom_coeff[0] * m.asu.op_mode
+                + params.const_vom_coeff[1] * m.asu.aux_max_o2_flow["op_mode"]
+                + params.var_vom_coeff * m.asu.o2_flow
             ),
-        }
+        },
+        declare_variables=True,
     )
+    m.asu.o2_flow_lb_con = Constraint(
+        expr=params.op_capacity_range[0] * m.asu.aux_max_o2_flow["op_mode"]
+        <= m.asu.o2_flow
+    )
+    m.asu.o2_flow_ub_con = Constraint(
+        expr=m.asu.o2_flow
+        <= params.op_capacity_range[1] * m.asu.aux_max_o2_flow["op_mode"]
+    )
+
     m.asu.su_sd_power = Var(
         within=NonNegativeReals,
         doc="Power requirement during startup and shutdown [in MW]",
@@ -230,12 +290,37 @@ def flowsheet_model(m, ptm):
         polynomial_surrogate_data={
             "operation_var": "o2_flow",
             "power": nlu_params.power_o2_flow_ratio,
-            "vom": (
-                nlu_params.const_vom_coeff[0]
-                + nlu_params.const_vom_coeff[1] * ptm.nlu_design.max_o2_flow,
-                nlu_params.var_vom_coeff,
-            ),
+            # "vom": (
+            #     nlu_params.const_vom_coeff[0]
+            #     + nlu_params.const_vom_coeff[1] * ptm.nlu_design.max_o2_flow,
+            #     nlu_params.var_vom_coeff,
+            # ),
         }
+    )
+    m.nlu.o2_flow.domain = NonNegativeReals
+
+    m.nlu.define_linearization_vars(
+        capacity_var=ptm.nlu_design.max_o2_flow,
+        aux_var_name="aux_max_o2_flow",
+        var_list=["op_mode"],
+    )
+    m.nlu.build_expressions(
+        expressions={
+            "vom": (
+                nlu_params.const_vom_coeff[0] * m.nlu.op_mode
+                + nlu_params.const_vom_coeff[1] * m.nlu.aux_max_o2_flow["op_mode"]
+                + nlu_params.var_vom_coeff * m.nlu.o2_flow
+            ),
+        },
+        declare_variables=True,
+    )
+    m.nlu.o2_flow_lb_con = Constraint(
+        expr=nlu_params.op_capacity_range[0] * m.nlu.aux_max_o2_flow["op_mode"]
+        <= m.nlu.o2_flow
+    )
+    m.nlu.o2_flow_ub_con = Constraint(
+        expr=m.nlu.o2_flow
+        <= nlu_params.op_capacity_range[1] * m.nlu.aux_max_o2_flow["op_mode"]
     )
     m.minimum_tank_holdup = Expression(
         expr=tank_params.min_holdup * ptm.tank_design.tank_capacity,
@@ -273,24 +358,44 @@ def add_dfc_startup_fuel(m: PriceTakerModel):
             + params.perf_curve_coeff[1] * params.op_capacity_range[0]
         )
         * params.ng_flow_power_ratio
-        * m.dfc_design.max_power
+        # * m.dfc_design.max_power
     )
     num_time_steps = len(m.period)
+
+    # @m.Constraint(m.period.index_set())
+    # def dfc_su_sd_fuel_requirement(blk, d, t):
+    #     k1 = (
+    #         0.25 * min_fuel * blk.period[d, t + 2].dfc.startup
+    #         if t + 2 <= num_time_steps
+    #         else 0
+    #     )
+    #     k2 = (
+    #         0.75 * min_fuel * blk.period[d, t + 1].dfc.startup
+    #         if t + 1 <= num_time_steps
+    #         else 0
+    #     )
+    #     k3 = 0.75 * min_fuel * blk.period[d, t].dfc.shutdown
+    #     k4 = 0.25 * min_fuel * blk.period[d, t - 1].dfc.shutdown if t - 1 > 0 else 0
+    #     return blk.period[d, t].dfc.su_sd_ng_flow == k1 + k2 + k3 + k4
 
     @m.Constraint(m.period.index_set())
     def dfc_su_sd_fuel_requirement(blk, d, t):
         k1 = (
-            0.25 * min_fuel * blk.period[d, t + 2].dfc.startup
+            0.25 * min_fuel * blk.period[d, t + 2].dfc.aux_max_power["startup"]
             if t + 2 <= num_time_steps
             else 0
         )
         k2 = (
-            0.75 * min_fuel * blk.period[d, t + 1].dfc.startup
+            0.75 * min_fuel * blk.period[d, t + 1].dfc.aux_max_power["startup"]
             if t + 1 <= num_time_steps
             else 0
         )
-        k3 = 0.75 * min_fuel * blk.period[d, t].dfc.shutdown
-        k4 = 0.25 * min_fuel * blk.period[d, t - 1].dfc.shutdown if t - 1 > 0 else 0
+        k3 = 0.75 * min_fuel * blk.period[d, t].dfc.aux_max_power["shutdown"]
+        k4 = (
+            0.25 * min_fuel * blk.period[d, t - 1].dfc.aux_max_power["shutdown"]
+            if t - 1 > 0
+            else 0
+        )
         return blk.period[d, t].dfc.su_sd_ng_flow == k1 + k2 + k3 + k4
 
 
@@ -303,19 +408,32 @@ def add_asu_startup_power(m: PriceTakerModel):
     # Assuming that the power requirement during shutdown is 50% of full load power
     # Assuming that the time required for startup is 8 hours
     # Assuming that the time required for shutdown is 1 hour
-    start_power = 0.8 * params.power_o2_flow_ratio * m.asu_design.max_o2_flow
-    shutdown_power = 0.5 * params.power_o2_flow_ratio * m.asu_design.max_o2_flow
+    start_power = 0.8 * params.power_o2_flow_ratio
+    shutdown_power = 0.5 * params.power_o2_flow_ratio
     su_time = 8
     num_time_steps = len(m.period)
+
+    # @m.Constraint(m.period.index_set())
+    # def asu_su_sd_fuel_requirement(blk, d, t):
+    #     _startup_power = sum(
+    #         start_power * blk.period[d, t + i].asu.startup
+    #         for i in range(1, su_time + 1)
+    #         if t + i <= num_time_steps
+    #     )
+    #     return (
+    #         blk.period[d, t].asu.su_sd_power
+    #         == _startup_power + shutdown_power * blk.period[d, t].asu.shutdown
+    #     )
 
     @m.Constraint(m.period.index_set())
     def asu_su_sd_fuel_requirement(blk, d, t):
         _startup_power = sum(
-            start_power * blk.period[d, t + i].asu.startup
+            start_power * blk.period[d, t + i].asu.aux_max_o2_flow["startup"]
             for i in range(1, su_time + 1)
             if t + i <= num_time_steps
         )
         return (
             blk.period[d, t].asu.su_sd_power
-            == _startup_power + shutdown_power * blk.period[d, t].asu.shutdown
+            == _startup_power
+            + shutdown_power * blk.period[d, t].asu.aux_max_o2_flow["shutdown"]
         )
