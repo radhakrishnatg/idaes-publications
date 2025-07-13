@@ -29,6 +29,7 @@ from default_parameters import (
 from npv_model import build_pricetaker
 from price_data import CO2_PRICE_DATA, LMP_DATA, NG_PRICE_DATA, PRICE_SIGNALS
 from util import partition_variables
+from linearize_model import linearize_price_taker_model
 
 # Create a folder called "results", if it does not exist, to store all results
 results_folder = Path(__file__).parent / "results"
@@ -36,15 +37,31 @@ if not results_folder.exists():
     results_folder.mkdir()
 
 
-def solve_and_save_results(m: PriceTakerModel, folder: Path, filename: str):
+def solve_and_save_results(
+    m: PriceTakerModel,
+    folder: Path,
+    filename: str,
+    linearize: bool = False,
+    partition_size: int | None = None,
+):
     """Solves the optimization model and writes the results to a file"""
 
     # Solve the model
     solver = pyo.SolverFactory("gurobi_persistent")
-    solver.set_instance(m)
-    partition_variables(solver, partition_size=500)
     solver.options["MIPGap"] = 0.01
     solver.options["TimeLimit"] = 10000
+
+    if linearize:
+        linearize_price_taker_model(m)
+        solver.options["NonConvex"] = 0
+    else:
+        # Turn of presolve for the MIQCP case
+        solver.options["Presolve"] = 0
+
+    solver.set_instance(m)
+    if partition_size is not None:
+        partition_variables(solver, partition_size)
+
     solver.solve(tee=True)
 
     # Write results to files
@@ -61,6 +78,8 @@ def solve_and_save_results(m: PriceTakerModel, folder: Path, filename: str):
     des_var_values["capacity_factor"] = pyo.value(
         sum(m.period[:, :].power_to_grid) / (8760 * max(0.001, _net_power))
     )
+    des_var_values["linearized_model"] = linearize
+    des_var_values["partition_size"] = partition_size
 
     # pylint: disable = unspecified-encoding
     with open(folder / (filename + ".json"), "w") as fp:

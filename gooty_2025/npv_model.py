@@ -25,7 +25,6 @@ from default_parameters import (
     CashflowParams,
 )
 import dfc_flowsheet as fs
-from unit_commitment import Block, startup_shutdown_constraints, ramping_limits
 
 
 def build_pricetaker(
@@ -95,105 +94,58 @@ def build_pricetaker(
     fs.add_dfc_startup_fuel(m)
     fs.add_asu_startup_power(m)
 
-    # # Add capacity limit constraints on all units
-    # m.add_capacity_limits(
-    #     op_block_name="dfc",
-    #     commodity="power",
-    #     capacity=m.dfc_design.max_power,
-    #     op_range_lb=dfc_params.op_capacity_range[0],
-    # )
-    # m.add_capacity_limits(
-    #     op_block_name="asu",
-    #     commodity="o2_flow",
-    #     capacity=m.asu_design.max_o2_flow,
-    #     op_range_lb=asu_params.op_capacity_range[0],
-    # )
-    # m.add_capacity_limits(
-    #     op_block_name="nlu",
-    #     commodity="o2_flow",
-    #     capacity=m.nlu_design.max_o2_flow,
-    #     op_range_lb=nlu_params.op_capacity_range[0],
-    # )
+    # Add capacity limit constraints on all units
+    m.add_capacity_limits(
+        op_block_name="dfc",
+        commodity="power",
+        capacity=m.dfc_design.max_power,
+        op_range_lb=dfc_params.op_capacity_range[0],
+    )
+    m.add_capacity_limits(
+        op_block_name="asu",
+        commodity="o2_flow",
+        capacity=m.asu_design.max_o2_flow,
+        op_range_lb=asu_params.op_capacity_range[0],
+    )
+    m.add_capacity_limits(
+        op_block_name="nlu",
+        commodity="o2_flow",
+        capacity=m.nlu_design.max_o2_flow,
+        op_range_lb=nlu_params.op_capacity_range[0],
+    )
 
     # Add minimum uptime-downtime constraints
-    # m.add_startup_shutdown(
-    #     op_block_name="dfc",
-    #     des_block_name="dfc_design",
-    #     up_time=dfc_params.min_up_time,
-    #     down_time=dfc_params.min_down_time,
-    # )
-    # m.add_startup_shutdown(
-    #     op_block_name="asu",
-    #     des_block_name="asu_design",
-    #     up_time=asu_params.min_up_time,
-    #     down_time=asu_params.min_down_time,
-    # )
-    m.dfc_startup_shutdown = Block(m.set_days)
-    startup_shutdown_constraints(
-        blk=m.dfc_startup_shutdown[1],
-        op_blocks=dict(m.period[1, :].dfc.wildcard_items()),
-        install_unit=m.dfc_design.install_unit,
-        up_time=dfc_params.min_up_time,
-        down_time=dfc_params.min_down_time,
-        set_time=m.set_time,
-        capacity_var=m.dfc_design.max_power,
-        aux_var_name="aux_max_power",
+    m.add_startup_shutdown(
+        op_block_name="dfc",
+        des_block_name="dfc_design",
+        minimum_up_time=dfc_params.min_up_time,
+        minimum_down_time=dfc_params.min_down_time,
     )
-    m.asu_startup_shutdown = Block(m.set_days)
-    startup_shutdown_constraints(
-        blk=m.asu_startup_shutdown[1],
-        op_blocks=dict(m.period[1, :].asu.wildcard_items()),
-        install_unit=m.asu_design.install_unit,
-        up_time=asu_params.min_up_time,
-        down_time=asu_params.min_down_time,
-        set_time=m.set_time,
-        capacity_var=m.asu_design.max_o2_flow,
-        aux_var_name="aux_max_o2_flow",
+    m.add_startup_shutdown(
+        op_block_name="asu",
+        des_block_name="asu_design",
+        minimum_up_time=asu_params.min_up_time,
+        minimum_down_time=asu_params.min_down_time,
     )
 
     # Add ramping constraints
-    # m.add_ramping_limits(
-    #     op_block_name="dfc",
-    #     commodity="power",
-    #     capacity=m.dfc_design.max_power,
-    #     startup_rate=dfc_params.startup_rate,
-    #     shutdown_rate=dfc_params.shutdown_rate,
-    #     rampup_rate=dfc_params.rampup_rate,
-    #     rampdown_rate=dfc_params.rampdown_rate,
-    # )
-    # m.add_ramping_limits(
-    #     op_block_name="asu",
-    #     commodity="o2_flow",
-    #     capacity=m.asu_design.max_o2_flow,
-    #     startup_rate=asu_params.startup_rate,
-    #     shutdown_rate=asu_params.shutdown_rate,
-    #     rampup_rate=asu_params.rampup_rate,
-    #     rampdown_rate=asu_params.rampdown_rate,
-    # )
-    m.dfc_power_ramping = Block(m.set_days)
-    ramping_limits(
-        blk=m.dfc_power_ramping[1],
-        op_blocks=dict(m.period[1, :].dfc.wildcard_items()),
-        commodity_name="power",
-        ru_rate=dfc_params.rampup_rate,
-        rd_rate=dfc_params.rampdown_rate,
-        su_rate=dfc_params.startup_rate,
-        sd_rate=dfc_params.shutdown_rate,
-        set_time=m.set_time,
-        aux_var_name="aux_max_power",
+    m.add_ramping_limits(
+        op_block_name="dfc",
+        commodity="power",
+        capacity=m.dfc_design.max_power,
+        startup_rate=dfc_params.startup_rate,
+        shutdown_rate=dfc_params.shutdown_rate,
+        rampup_rate=dfc_params.rampup_rate,
+        rampdown_rate=dfc_params.rampdown_rate,
     )
-
-    m.asu_o2_flow_ramping = Block(m.set_days)
-    ramping_limits(
-        blk=m.asu_o2_flow_ramping[1],
-        op_blocks=dict(m.period[1, :].asu.wildcard_items()),
-        commodity_name="o2_flow",
-        ru_rate=asu_params.rampup_rate,
-        rd_rate=asu_params.rampdown_rate,
-        su_rate=asu_params.startup_rate,
-        sd_rate=asu_params.shutdown_rate,
-        set_time=m.set_time,
-        aux_var_name="aux_max_o2_flow",
+    m.add_ramping_limits(
+        op_block_name="asu",
+        commodity="o2_flow",
+        capacity=m.asu_design.max_o2_flow,
+        startup_rate=asu_params.startup_rate,
+        shutdown_rate=asu_params.shutdown_rate,
+        rampup_rate=asu_params.rampup_rate,
+        rampdown_rate=asu_params.rampdown_rate,
     )
 
     # Add hourly cashflow expressions
