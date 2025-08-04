@@ -14,7 +14,7 @@
 """Contains function that returns an instance of the price-taker model"""
 
 from idaes.apps.grid_integration import DesignModel, PriceTakerModel
-from pyomo.environ import Expression
+from pyomo.environ import Constraint, Expression
 
 # pylint: disable = import-error
 from default_parameters import (
@@ -84,69 +84,21 @@ def build_pricetaker(
             "fom": tank_params.fom,
         }
     )
+    # Install tank only if the NLU is installed
+    m.nlu_tank_installation = Constraint(
+        expr=m.tank_design.install_unit == m.nlu_design.install_unit
+    )
 
     # Build multiperiod flowsheet model
     m.build_multiperiod_model(
-        flowsheet_func=fs.flowsheet_model, flowsheet_options={"ptm": m}
+        flowsheet_func=fs.flowsheet_model,
+        flowsheet_options={"ptm": m},
+        add_periodic_constraints=True,  # Periodic constraints for storage
     )
 
     # Add startup/shutdown fuel/power requirement for DFC and ASU
     fs.add_dfc_startup_fuel(m)
     fs.add_asu_startup_power(m)
-
-    # Add capacity limit constraints on all units
-    m.add_capacity_limits(
-        op_block_name="dfc",
-        commodity="power",
-        capacity=m.dfc_design.max_power,
-        op_range_lb=dfc_params.op_capacity_range[0],
-    )
-    m.add_capacity_limits(
-        op_block_name="asu",
-        commodity="o2_flow",
-        capacity=m.asu_design.max_o2_flow,
-        op_range_lb=asu_params.op_capacity_range[0],
-    )
-    m.add_capacity_limits(
-        op_block_name="nlu",
-        commodity="o2_flow",
-        capacity=m.nlu_design.max_o2_flow,
-        op_range_lb=nlu_params.op_capacity_range[0],
-    )
-
-    # Add minimum uptime-downtime constraints
-    m.add_startup_shutdown(
-        op_block_name="dfc",
-        des_block_name="dfc_design",
-        minimum_up_time=dfc_params.min_up_time,
-        minimum_down_time=dfc_params.min_down_time,
-    )
-    m.add_startup_shutdown(
-        op_block_name="asu",
-        des_block_name="asu_design",
-        minimum_up_time=asu_params.min_up_time,
-        minimum_down_time=asu_params.min_down_time,
-    )
-
-    # Add ramping constraints
-    m.add_ramping_limits(
-        op_block_name="dfc",
-        commodity="power",
-        capacity=m.dfc_design.max_power,
-        startup_rate=dfc_params.startup_rate,
-        shutdown_rate=dfc_params.shutdown_rate,
-        rampup_rate=dfc_params.rampup_rate,
-        rampdown_rate=dfc_params.rampdown_rate,
-    )
-    m.add_ramping_limits(
-        op_block_name="asu",
-        commodity="o2_flow",
-        capacity=m.asu_design.max_o2_flow,
-        startup_rate=asu_params.startup_rate,
-        shutdown_rate=asu_params.shutdown_rate,
-        rampup_rate=asu_params.rampup_rate,
-        rampdown_rate=asu_params.rampdown_rate,
-    )
 
     # Add hourly cashflow expressions
     m.add_hourly_cashflows(

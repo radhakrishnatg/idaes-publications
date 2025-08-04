@@ -41,8 +41,8 @@ def solve_and_save_results(
     m: PriceTakerModel,
     folder: Path,
     filename: str,
-    linearize: bool = False,
-    partition_size: int | None = None,
+    linearize: bool = True,
+    partition_size: int | None = 500,
 ):
     """Solves the optimization model and writes the results to a file"""
 

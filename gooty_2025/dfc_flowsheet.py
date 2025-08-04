@@ -53,12 +53,18 @@ def _add_dfc_operation_model(m, ptm):
                 * ptm.dfc_design.max_power,
                 params.perf_curve_coeff[1] * params.ng_flow_power_ratio,
             ),
-            "vom": (
-                params.const_vom_coeff[0]
-                + params.const_vom_coeff[1] * ptm.dfc_design.max_power,
-                params.var_vom_coeff,
-            ),
         },
+        # Declare parameters for operational constraints
+        design_block_name=ptm.dfc_design.name,
+        commodity="power",
+        capacity=ptm.dfc_design.max_power,
+        op_range_lb=params.op_capacity_range[0],
+        minimum_up_time=params.min_up_time,
+        minimum_down_time=params.min_down_time,
+        startup_rate=params.startup_rate,
+        shutdown_rate=params.shutdown_rate,
+        rampup_rate=params.rampup_rate,
+        rampdown_rate=params.rampdown_rate,
     )
     m.dfc.su_sd_ng_flow = Var(
         within=NonNegativeReals,
@@ -92,8 +98,12 @@ def _add_dfc_operation_model(m, ptm):
                 * params.ng_cost  # $/MMBtu
                 / 1000  # Converting the cost to $1000
             ),
+            "vom": (
+                params.const_vom_coeff[0] * m.dfc.op_mode
+                + params.const_vom_coeff[1] * ptm.dfc_design.max_power * m.dfc.op_mode
+            ),
         },
-        declare_variables=True,
+        # declare_variables=True,
     )
 
 
@@ -110,12 +120,18 @@ def _add_asu_operation_model(m, ptm):
                 * ptm.asu_design.max_o2_flow,
                 params.perf_curve_coeff[1] * params.power_o2_flow_ratio,
             ),
-            "vom": (
-                params.const_vom_coeff[0]
-                + params.const_vom_coeff[1] * ptm.asu_design.max_o2_flow,
-                params.var_vom_coeff,
-            ),
-        }
+        },
+        # Declare parameters for operational constraints
+        design_block_name=ptm.asu_design.name,
+        commodity="o2_flow",
+        capacity=ptm.asu_design.max_o2_flow,
+        op_range_lb=params.op_capacity_range[0],
+        minimum_up_time=params.min_up_time,
+        minimum_down_time=params.min_down_time,
+        startup_rate=params.startup_rate,
+        shutdown_rate=params.shutdown_rate,
+        rampup_rate=params.rampup_rate,
+        rampdown_rate=params.rampdown_rate,
     )
     m.asu.su_sd_power = Var(
         within=NonNegativeReals,
@@ -138,8 +154,12 @@ def _add_asu_operation_model(m, ptm):
                 * params.nitrogen_price  # $/kg GAN
                 / 1000  # Converting the revenue to $1000
             ),
+            "vom": (
+                params.const_vom_coeff[0] * m.asu.op_mode
+                + params.const_vom_coeff[1] * ptm.asu_design.max_o2_flow * m.asu.op_mode
+            ),
         },
-        declare_variables=True,
+        # declare_variables=True,
     )
 
 
@@ -193,7 +213,6 @@ def _add_power_vars_and_constraints(m):
 def _add_o2_flow_vars_and_constraints(m):
     """Adds auxiliary oxygen flow variables and oxygen balance constraints"""
     m.o2_asu_to_dfc = Var(within=NonNegativeReals, doc="O2 flow from ASU to DFC")
-    m.o2_asu_to_nlu = Var(within=NonNegativeReals, doc="O2 flow from ASU to NLU")
     m.o2_asu_to_vent = Var(within=NonNegativeReals, doc="O2 flow vented")
 
     m.dfc_o2_balance = Constraint(
@@ -201,12 +220,8 @@ def _add_o2_flow_vars_and_constraints(m):
         doc="Oxygen flow balance around the direct fired cycle",
     )
     m.asu_o2_balance = Constraint(
-        expr=m.asu.o2_flow == m.o2_asu_to_dfc + m.o2_asu_to_nlu + m.o2_asu_to_vent,
+        expr=m.asu.o2_flow == m.o2_asu_to_dfc + m.nlu.o2_flow + m.o2_asu_to_vent,
         doc="Oxygen flow balance around the air separation unit",
-    )
-    m.nlu_o2_balance = Constraint(
-        expr=m.nlu.o2_flow == m.o2_asu_to_nlu,
-        doc="Oxygen flow balance around the liquefaction unit",
     )
     m.tank_o2_balance = Constraint(
         expr=m.nlu.o2_flow == m.tank.charge_rate,
@@ -225,24 +240,33 @@ def flowsheet_model(m, ptm):
     _add_asu_operation_model(m, ptm)
 
     nlu_params: NLUParams = ptm.nlu_params
-    tank_params: LOxTankParams = ptm.tank_params
     m.nlu = OperationModel(
         polynomial_surrogate_data={
             "operation_var": "o2_flow",
             "power": nlu_params.power_o2_flow_ratio,
+        },
+        # Declare parameters for operational constraints
+        commodity="o2_flow",
+        capacity=ptm.nlu_design.max_o2_flow,
+        op_range_lb=nlu_params.op_capacity_range[0],
+    )
+    m.nlu.build_expressions(
+        expressions={
             "vom": (
-                nlu_params.const_vom_coeff[0]
-                + nlu_params.const_vom_coeff[1] * ptm.nlu_design.max_o2_flow,
-                nlu_params.var_vom_coeff,
-            ),
-        }
+                nlu_params.const_vom_coeff[0] * m.nlu.op_mode
+                + nlu_params.const_vom_coeff[1]
+                * ptm.nlu_design.max_o2_flow
+                * m.nlu.op_mode
+            )
+        },
+        # declare_variables=True,
     )
-    m.minimum_tank_holdup = Expression(
-        expr=tank_params.min_holdup * ptm.tank_design.tank_capacity,
-    )
+
+    tank_params: LOxTankParams = ptm.tank_params
     m.tank = StorageModel(
+        # Flowrates are in kg/s. Converting them to tonne/hr
         time_interval=(3600 / 1000),
-        min_holdup=m.minimum_tank_holdup,
+        min_holdup=tank_params.min_holdup * ptm.tank_design.tank_capacity,
         max_holdup=ptm.tank_design.tank_capacity,
     )
     m.tank.power = Expression(

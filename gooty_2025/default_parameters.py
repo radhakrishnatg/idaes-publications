@@ -124,7 +124,7 @@ class DFCParams:
     op_capacity_range: tuple   = (0.3, 1)                    # [-] Norm. operation range (Note 5)
     perf_curve_coeff: tuple    = (0.3248, 0.6752)            # NG Performance curve coeffs. (Note 6)
     co2_emission_rate: float   = 2.6467                      # [kg CO2/kg NG] (See Note 7).
-    co2_captured: float        = 0.985                       # [-] Fraction of CO2 captured
+    co2_captured: float        = 0.982                       # [-] Fraction of CO2 captured
     var_vom_coeff: float       = 0                           # [$1000/MWh] Non-fuel VOM (Note 8)
     const_vom_coeff: tuple     = (0.3736672, 0.0018033)      # [$1000/hr] Non-fuel VOM (See Note 8)
     ng_cost: float             = 3                           # [$/MMBtu] Cost of natural gas
