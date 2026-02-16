@@ -16,6 +16,7 @@
 import json
 from pathlib import Path
 from idaes.apps.grid_integration import PriceTakerModel
+import pandas as pd
 import pyomo.environ as pyo
 
 # pylint: disable = import-error
@@ -30,6 +31,18 @@ from npv_model import build_pricetaker
 from price_data import CO2_PRICE_DATA, LMP_DATA, NG_PRICE_DATA, PRICE_SIGNALS
 from util import partition_variables
 from linearize_model import linearize_price_taker_model
+
+# NOTE: Capex costs in the default model parameters only include
+# plant costs. It does not include owner's costs.
+# Owners costs are roughly 21.3496% of the Total plant cost, so we multiply
+# TPC with 1.213496 to obtain the Total Owner's cost
+# Then, we multiply it with 1.093 to obtain the Total as-spent cost
+# Annualization factor (FCR) is 0.0707
+# Depreciation is included in FRC, so we set corporate tax rate to zero
+
+# Modify CAPEX coefficients here
+cost_params = CashflowParams(tax_rate=0)
+cost_params.fcr = 0.0707 * 1.093 * 1.213496
 
 # Create a folder called "results", if it does not exist, to store all results
 results_folder = Path(__file__).parent / "results"
@@ -50,6 +63,8 @@ def solve_and_save_results(
     solver = pyo.SolverFactory("gurobi_persistent")
     solver.options["MIPGap"] = 0.01
     solver.options["TimeLimit"] = 10000
+    solver.options["LogFile"] = str(folder / (filename + ".log"))
+    solver.options["LogToConsole"] = 0
 
     if linearize:
         linearize_price_taker_model(m)
@@ -93,18 +108,6 @@ def model_validation():
     if not folder.exists():
         folder.mkdir()
 
-    # Note: Capex costs in the default model parameters only include
-    # plant costs. It does not include owner's costs.
-    # Owners costs are roughly 21.3496% of the Total plant cost, so we multiply
-    # TPC with 1.213496 to obtain the Total Owner's cost
-    # Then, we multiply it with 1.093 to obtain the Total as-spent cost
-    # Annualization factor (FCR) is 0.0707
-    # Depreciation is included in FRC, so we set corporate tax rate to zero
-
-    # Modify CAPEX coefficients here
-    cost_params = CashflowParams(tax_rate=0)
-    cost_params.fcr = 0.0707 * 1.093 * 1.213496
-
     dfc_size = {"V1": 777.685, "V2": 422.049, "V3": 176.032}
     lcoe = {"V1": 80.1, "V2": 87.8, "V3": 102.7}
 
@@ -147,7 +150,7 @@ def no_storage_no_ar_no_co2():
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
             tank_params=LOxTankParams(),
-            cashflow_params=CashflowParams(),
+            cashflow_params=cost_params,
         )
 
         # Ensure that DFC is built
@@ -158,8 +161,8 @@ def no_storage_no_ar_no_co2():
 
 def no_storage_with_ar_no_co2():
     """
-    Runs the price-taker model for the base case i.e., without
-    storage, without revenue from Argon market, and without
+    Runs the price-taker model for the case without
+    storage, includes revenue from Argon market, but without
     CO2 credits.
     """
     # Create a sub-folder in results, if it does not exist
@@ -168,7 +171,6 @@ def no_storage_with_ar_no_co2():
         folder.mkdir()
 
     for signal, filename in PRICE_SIGNALS.items():
-        print("Solving for price signal: ", signal)
         m: PriceTakerModel = build_pricetaker(
             lmp_data=LMP_DATA[signal],
             dfc_params=DFCParams(
@@ -177,7 +179,7 @@ def no_storage_with_ar_no_co2():
             asu_params=ASUParams(argon_price=0.4),
             nlu_params=NLUParams(),
             tank_params=LOxTankParams(),
-            cashflow_params=CashflowParams(),
+            cashflow_params=cost_params,
         )
 
         # Ensure that DFC is built
@@ -188,8 +190,8 @@ def no_storage_with_ar_no_co2():
 
 def no_storage_no_ar_with_co2():
     """
-    Runs the price-taker model for the base case i.e., without
-    storage, without revenue from Argon market, and without
+    Runs the price-taker model for the case without
+    storage, without revenue from Argon market, including
     CO2 credits.
     """
     # Create a sub-folder in results, if it does not exist
@@ -209,7 +211,7 @@ def no_storage_no_ar_with_co2():
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
             tank_params=LOxTankParams(),
-            cashflow_params=CashflowParams(),
+            cashflow_params=cost_params,
         )
 
         # Ensure that DFC is built
@@ -241,7 +243,7 @@ def no_storage_with_ar_with_co2():
             asu_params=ASUParams(argon_price=0.4),
             nlu_params=NLUParams(),
             tank_params=LOxTankParams(),
-            cashflow_params=CashflowParams(),
+            cashflow_params=cost_params,
         )
 
         # Ensure that DFC is built
@@ -271,7 +273,7 @@ def no_storage_full_flexibility():
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
             tank_params=LOxTankParams(),
-            cashflow_params=CashflowParams(),
+            cashflow_params=cost_params,
         )
 
         # Ensure that DFC is built
@@ -288,7 +290,7 @@ def no_storage_full_flexibility():
 
 def with_storage_full_flexibility():
     """
-    Runs the price-taker model for the base case i.e., without
+    Runs the price-taker model for the case with
     storage, without revenue from Argon market, and without
     CO2 credits.
     """
@@ -307,17 +309,62 @@ def with_storage_full_flexibility():
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
             tank_params=LOxTankParams(),
-            cashflow_params=CashflowParams(),
+            cashflow_params=cost_params,
         )
 
         # Ensure that DFC is built
         m.dfc_design.install_unit.fix(1)
+        m.tank_design.install_unit.fix(1)
 
         # Ensure that all units are fully flexible:
         m.del_component(m.dfc_startup_shutdown)
         m.del_component(m.asu_startup_shutdown)
         m.del_component(m.dfc_power_ramping)
         m.del_component(m.asu_o2_flow_ramping)
+        solve_and_save_results(m, folder, filename)
+
+
+def with_storage_no_ar_no_co2():
+    """
+    Runs the price-taker model for the case with
+    storage, without revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "with_storage_no_ar_no_co2"
+    if not folder.exists():
+        folder.mkdir()
+
+    wos_folder = results_folder / "no_storage_no_ar_no_co2"
+
+    for signal, filename in PRICE_SIGNALS.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal], carbon_price=CO2_PRICE_DATA[signal]
+            ),
+            asu_params=ASUParams(),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=cost_params,
+        )
+
+        # DFC with storage must operate during instances
+        # when the DFC without storage was operating
+        sol = pd.read_csv(wos_folder / (filename + ".csv"))
+        for t, val in sol["dfc.op_mode"].items():
+            if val > 0.99:
+                m.period[1, t + 1].dfc.op_mode.fix(1)
+
+        # Relax binary requirement on shutdown variables
+        for d, t in m.period:
+            m.period[d, t].dfc.shutdown.domain = pyo.UnitInterval
+            m.period[d, t].asu.shutdown.domain = pyo.UnitInterval
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.tank_design.install_unit.fix(1)
         solve_and_save_results(m, folder, filename)
 
 
