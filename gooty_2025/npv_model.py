@@ -84,6 +84,10 @@ def build_pricetaker(
             "fom": tank_params.fom,
         }
     )
+    # Install ASU if the power cycle is installed
+    m.dfc_asu_installation = Constraint(
+        expr=m.dfc_design.install_unit == m.asu_design.install_unit
+    )
     # Install tank only if the NLU is installed
     m.nlu_tank_installation = Constraint(
         expr=m.tank_design.install_unit == m.nlu_design.install_unit

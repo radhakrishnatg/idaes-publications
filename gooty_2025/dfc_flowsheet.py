@@ -19,7 +19,7 @@ the direct-fired cycle, and for computing power requirement for startup/shutdown
 of the air separation unit.
 """
 
-from idaes.apps.grid_integration import OperationModel, StorageModel, PriceTakerModel
+from idaes.apps.grid_integration import StorageModel, PriceTakerModel
 from pyomo.environ import (
     Var,
     NonNegativeReals,
@@ -36,6 +36,7 @@ from default_parameters import (
     LOxTankParams,
     HR_TO_SEC,
 )
+from modified_operation_model import OperationModel
 
 
 def _add_dfc_operation_model(m, ptm):

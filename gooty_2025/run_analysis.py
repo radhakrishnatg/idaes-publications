@@ -29,7 +29,10 @@ from default_parameters import (
 )
 from npv_model import build_pricetaker
 from price_data import CO2_PRICE_DATA, LMP_DATA, NG_PRICE_DATA, PRICE_SIGNALS
-from util import partition_variables
+from util import (
+    partition_variables,
+    make_lower_capacity_constraints_lazy,
+)
 from linearize_model import linearize_price_taker_model
 
 # NOTE: Capex costs in the default model parameters only include
@@ -56,6 +59,7 @@ def solve_and_save_results(
     filename: str,
     linearize: bool = True,
     partition_size: int | None = 500,
+    make_cap_con_lazy: bool = True,
 ):
     """Solves the optimization model and writes the results to a file"""
 
@@ -70,12 +74,15 @@ def solve_and_save_results(
         linearize_price_taker_model(m)
         solver.options["NonConvex"] = 0
     else:
-        # Turn of presolve for the MIQCP case
+        # Turn off presolve for the MIQCP case
         solver.options["Presolve"] = 0
 
     solver.set_instance(m)
     if partition_size is not None:
         partition_variables(solver, partition_size)
+
+    if make_cap_con_lazy:
+        make_lower_capacity_constraints_lazy(solver)
 
     solver.solve(tee=True)
 
@@ -130,7 +137,7 @@ def model_validation():
         solve_and_save_results(m, folder, ps)
 
 
-def no_storage_no_ar_no_co2():
+def no_storage_no_ar_no_co2(price_signals: dict | None = None):
     """
     Runs the price-taker model for the base case i.e., without
     storage, without revenue from Argon market, and without
@@ -141,7 +148,10 @@ def no_storage_no_ar_no_co2():
     if not folder.exists():
         folder.mkdir()
 
-    for signal, filename in PRICE_SIGNALS.items():
+    if price_signals is None:
+        price_signals = PRICE_SIGNALS
+
+    for signal, filename in price_signals.items():
         m: PriceTakerModel = build_pricetaker(
             lmp_data=LMP_DATA[signal],
             dfc_params=DFCParams(
@@ -159,7 +169,7 @@ def no_storage_no_ar_no_co2():
         solve_and_save_results(m, folder, filename)
 
 
-def no_storage_with_ar_no_co2():
+def no_storage_with_ar_no_co2(price_signals: dict | None = None):
     """
     Runs the price-taker model for the case without
     storage, includes revenue from Argon market, but without
@@ -170,7 +180,10 @@ def no_storage_with_ar_no_co2():
     if not folder.exists():
         folder.mkdir()
 
-    for signal, filename in PRICE_SIGNALS.items():
+    if price_signals is None:
+        price_signals = PRICE_SIGNALS
+
+    for signal, filename in price_signals.items():
         m: PriceTakerModel = build_pricetaker(
             lmp_data=LMP_DATA[signal],
             dfc_params=DFCParams(
@@ -188,7 +201,7 @@ def no_storage_with_ar_no_co2():
         solve_and_save_results(m, folder, filename)
 
 
-def no_storage_no_ar_with_co2():
+def no_storage_no_ar_with_co2(price_signals: dict | None = None):
     """
     Runs the price-taker model for the case without
     storage, without revenue from Argon market, including
@@ -198,6 +211,9 @@ def no_storage_no_ar_with_co2():
     folder = results_folder / "no_storage_no_ar_with_co2"
     if not folder.exists():
         folder.mkdir()
+
+    if price_signals is None:
+        price_signals = PRICE_SIGNALS
 
     for signal, filename in PRICE_SIGNALS.items():
         print("Solving for price signal: ", signal)
@@ -324,7 +340,7 @@ def with_storage_full_flexibility():
         solve_and_save_results(m, folder, filename)
 
 
-def with_storage_no_ar_no_co2():
+def with_storage_no_ar_no_co2(price_signals: dict | None = None):
     """
     Runs the price-taker model for the case with
     storage, without revenue from Argon market, and without
@@ -335,14 +351,113 @@ def with_storage_no_ar_no_co2():
     if not folder.exists():
         folder.mkdir()
 
+    if price_signals is None:
+        price_signals = PRICE_SIGNALS
+
     wos_folder = results_folder / "no_storage_no_ar_no_co2"
 
-    for signal, filename in PRICE_SIGNALS.items():
+    for signal, filename in price_signals.items():
         print("Solving for price signal: ", signal)
         m: PriceTakerModel = build_pricetaker(
             lmp_data=LMP_DATA[signal],
             dfc_params=DFCParams(
                 ng_cost=NG_PRICE_DATA[signal], carbon_price=CO2_PRICE_DATA[signal]
+            ),
+            asu_params=ASUParams(),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=cost_params,
+        )
+
+        # DFC with storage must operate during instances
+        # when the DFC without storage was operating
+        sol = pd.read_csv(wos_folder / (filename + ".csv"))
+        for t, val in sol["dfc.op_mode"].items():
+            if val > 0.99:
+                m.period[1, t + 1].dfc.op_mode.fix(1)
+
+        # Relax binary requirement on shutdown variables
+        for d, t in m.period:
+            m.period[d, t].dfc.shutdown.domain = pyo.UnitInterval
+            m.period[d, t].asu.shutdown.domain = pyo.UnitInterval
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.tank_design.install_unit.fix(1)
+        solve_and_save_results(m, folder, filename)
+
+
+def with_storage_with_ar_no_co2(price_signals: dict | None = None):
+    """
+    Runs the price-taker model for the case with
+    storage, with revenue from Argon market, and without
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "with_storage_with_ar_no_co2"
+    if not folder.exists():
+        folder.mkdir()
+
+    if price_signals is None:
+        price_signals = PRICE_SIGNALS
+
+    wos_folder = results_folder / "no_storage_with_ar_no_co2"
+
+    for signal, filename in price_signals.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal], carbon_price=CO2_PRICE_DATA[signal]
+            ),
+            asu_params=ASUParams(argon_price=0.4),
+            nlu_params=NLUParams(),
+            tank_params=LOxTankParams(),
+            cashflow_params=cost_params,
+        )
+
+        # DFC with storage must operate during instances
+        # when the DFC without storage was operating
+        sol = pd.read_csv(wos_folder / (filename + ".csv"))
+        for t, val in sol["dfc.op_mode"].items():
+            if val > 0.99:
+                m.period[1, t + 1].dfc.op_mode.fix(1)
+
+        # Relax binary requirement on shutdown variables
+        for d, t in m.period:
+            m.period[d, t].dfc.shutdown.domain = pyo.UnitInterval
+            m.period[d, t].asu.shutdown.domain = pyo.UnitInterval
+
+        # Ensure that DFC is built
+        m.dfc_design.install_unit.fix(1)
+        m.tank_design.install_unit.fix(1)
+        solve_and_save_results(m, folder, filename)
+
+
+def with_storage_no_ar_with_co2(price_signals: dict | None = None):
+    """
+    Runs the price-taker model for the case with
+    storage, without revenue from Argon market, and with
+    CO2 credits.
+    """
+    # Create a sub-folder in results, if it does not exist
+    folder = results_folder / "with_storage_no_ar_with_co2"
+    if not folder.exists():
+        folder.mkdir()
+
+    if price_signals is None:
+        price_signals = PRICE_SIGNALS
+
+    wos_folder = results_folder / "no_storage_no_ar_with_co2"
+
+    for signal, filename in price_signals.items():
+        print("Solving for price signal: ", signal)
+        m: PriceTakerModel = build_pricetaker(
+            lmp_data=LMP_DATA[signal],
+            dfc_params=DFCParams(
+                ng_cost=NG_PRICE_DATA[signal],
+                carbon_price=CO2_PRICE_DATA[signal],
+                carbon_credit=0.06,
             ),
             asu_params=ASUParams(),
             nlu_params=NLUParams(),
@@ -375,4 +490,7 @@ if __name__ == "__main__":
     # no_storage_no_ar_with_co2()
     # no_storage_with_ar_with_co2()
     # no_storage_full_flexibility()
-    with_storage_full_flexibility()
+    # with_storage_full_flexibility()
+    # with_storage_no_ar_no_co2()
+    # with_storage_with_ar_no_co2()
+    with_storage_no_ar_with_co2()
